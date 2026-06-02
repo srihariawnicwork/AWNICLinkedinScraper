@@ -1,0 +1,45 @@
+name: Daily scrape
+
+on:
+  # Daily at 06:00 UTC = 10:00 Dubai. Adjust to taste — cron uses UTC.
+  schedule:
+    - cron: "0 6 * * *"
+  # Lets you run the scraper on demand from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      window_days:
+        description: "How many days of posts to fetch (1 = daily delta, 7 = full backfill)"
+        required: false
+        default: "1"
+
+# If a manual run starts while the scheduled one is still going, queue it
+# rather than running both — we don't want two scrapes hitting Apify in parallel.
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          VITE_SUPABASE_URL:    ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          APIFY_TOKEN:          ${{ secrets.APIFY_TOKEN }}
+          GROQ_API_KEY:         ${{ secrets.GROQ_API_KEY }}
+          SCRAPE_WINDOW_DAYS:   ${{ github.event.inputs.window_days || '1' }}
+          RETENTION_DAYS:       "7"
+        run: python scraper.py

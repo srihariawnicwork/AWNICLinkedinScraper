@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -m pip install feedparser groq --quiet 2>&1)",
+      "PowerShell($env:VITE_SUPABASE_URL='https://dytqggxkguuarifhccwp.supabase.co'; $env:VITE_SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dHFnZ3hrZ3V1YXJpZmhjY3dwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMTg4NjIsImV4cCI6MjA5MjY5NDg2Mn0.jdvdtEv3VdfDQMhjwCtUezXPKzly0KYhdo9-tvKdqL0'; $headers = @{ 'apikey' = $env:VITE_SUPABASE_ANON_KEY; 'Authorization' = \"Bearer $env:VITE_SUPABASE_ANON_KEY\" }; $resp = Invoke-WebRequest -Uri \"$env:VITE_SUPABASE_URL/rest/v1/linkedin_posts?select=ai_headline,ai_summary,source&limit=10\" -Headers $headers -UseBasicParsing; $resp.Content)",
+      "PowerShell(cd C:\\\\Users\\\\s_sai\\\\Desktop\\\\WebsiteVersion; $env:PYTHONIOENCODING='utf-8'; python _test_news.py)"
+    ]
+  }
+}
