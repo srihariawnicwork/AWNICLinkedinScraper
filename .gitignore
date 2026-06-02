@@ -241,3 +241,8 @@ pnpm-debug.log*
 _test_*.py
 _probe_*.py
 _fix_*.py
+
+# ── Claude Code per-developer settings ────────────────────────────────────────
+# .local.json files are user-specific permission grants / overrides and
+# shouldn't be shared. Team-wide settings should live in .claude/settings.json.
+.claude/settings.local.json
