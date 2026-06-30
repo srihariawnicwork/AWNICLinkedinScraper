@@ -1,5 +1,7 @@
 import os
 import sys
+import re
+import csv
 import time
 import json
 import urllib.parse
@@ -40,8 +42,8 @@ SCRAPE_WINDOW_DAYS = int(os.environ.get("SCRAPE_WINDOW_DAYS", "1"))
 # window — short window + longer retention = daily delta on a rolling feed.
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
 
-# Apify's LinkedIn actor accepts "past-24h", "past-week", "past-month".
-APIFY_DATE_POSTED = "past-24h" if SCRAPE_WINDOW_DAYS <= 1 else "past-week"
+# HarvestAPI accepts a `postedLimitDate` cutoff (ISO 8601). The actor returns
+# posts from now back to this date, newest-first. Computed per-fetch below.
 
 # ── UAE news sites ────────────────────────────────────────────────────────────
 # Direct UAE publisher feeds. Khaleej Times exposes RSS via a hidden API
@@ -125,31 +127,27 @@ def classify_topic(text: str) -> str:
 # ── Full directory: "Region|Type" → [{name, url, slug}] ───────────────────────
 DIRECTORY = {
     "UAE|Insurer": [
-        {"name": "ADNIC", "url": "https://linkedin.com/company/adnic", "slug": "adnic"},
+        {"name": "ADNIC", "url": "https://www.linkedin.com/company/abu-dhabi-national-insurance-company-adnic-/", "slug": "adnic"},
         {"name": "Emirates Insurance Company", "url": "https://linkedin.com/company/emirates-insurance-company", "slug": "emirates-insurance-company"},
-        {"name": "Orient Insurance", "url": "https://linkedin.com/company/orient-insurance-company", "slug": "orient-insurance-company"},
-        {"name": "Sukoon Insurance", "url": "https://linkedin.com/company/sukoon-insurance", "slug": "sukoon-insurance"},
-        {"name": "GIG Gulf", "url": "https://linkedin.com/company/gig-gulf", "slug": "gig-gulf"},
-        {"name": "Alliance Insurance", "url": "https://linkedin.com/company/alliance-insurance-psc", "slug": "alliance-insurance-psc"},
-        {"name": "Daman National Health Insurance", "url": "https://linkedin.com/company/daman", "slug": "daman"},
-        {"name": "National General Insurance NGI", "url": "https://linkedin.com/company/national-general-insurance", "slug": "national-general-insurance"},
-        {"name": "Dubai Insurance Company", "url": "https://linkedin.com/company/dubai-insurance-company", "slug": "dubai-insurance-company"},
-        {"name": "Dubai National Insurance Reinsurance", "url": "https://linkedin.com/company/dubai-national-insurance-reinsurance", "slug": "dubai-national-insurance-reinsurance"},
-        {"name": "Al Wathba National Insurance AWNIC", "url": "https://linkedin.com/company/al-wathba-national-insurance", "slug": "al-wathba-national-insurance"},
-        {"name": "Watania Takaful", "url": "https://linkedin.com/company/watania", "slug": "watania"},
-        {"name": "Abu Dhabi National Takaful ADNTC", "url": "https://linkedin.com/company/abu-dhabi-national-takaful", "slug": "abu-dhabi-national-takaful"},
-        {"name": "Al Buhaira National Insurance", "url": "https://linkedin.com/company/al-buhaira-national-insurance", "slug": "al-buhaira-national-insurance"},
-        {"name": "Al Khazna Insurance", "url": "https://linkedin.com/company/al-khazna-insurance", "slug": "al-khazna-insurance"},
-        {"name": "Al Dhafra Insurance", "url": "https://linkedin.com/company/al-dhafra-insurance", "slug": "al-dhafra-insurance"},
-        {"name": "Al Sagr National Insurance", "url": "https://linkedin.com/company/al-sagr-national-insurance", "slug": "al-sagr-national-insurance"},
-        {"name": "Salama Islamic Arab Insurance", "url": "https://linkedin.com/company/salama-islamic-arab-insurance", "slug": "salama-islamic-arab-insurance"},
+        {"name": "Orient Insurance", "url": "https://www.linkedin.com/company/orient-insurance/", "slug": "orient-insurance-company"},
+        {"name": "Sukoon Insurance", "url": "https://www.linkedin.com/company/sukooninsurance/", "slug": "sukoon-insurance"},
+        {"name": "GIG Gulf", "url": "https://www.linkedin.com/company/giggulf/", "slug": "gig-gulf"},
+        {"name": "Alliance Insurance", "url": "https://www.linkedin.com/company/alliance-insurance-p-s-c/", "slug": "alliance-insurance-psc"},
+        {"name": "Daman National Health Insurance", "url": "https://www.linkedin.com/company/the-national-insurance-company-daman/", "slug": "daman"},
+        {"name": "National General Insurance NGI", "url": "https://www.linkedin.com/company/ngiuae/", "slug": "national-general-insurance"},
+        {"name": "Dubai National Insurance Reinsurance", "url": "https://www.linkedin.com/company/dniuae/", "slug": "dubai-national-insurance-reinsurance"},
+        {"name": "Al Wathba National Insurance AWNIC", "url": "https://www.linkedin.com/company/alwathbainsurance/", "slug": "al-wathba-national-insurance"},
+        {"name": "Watania Takaful", "url": "https://www.linkedin.com/company/watania-takaful/", "slug": "watania"},
+        {"name": "Abu Dhabi National Takaful ADNTC", "url": "https://www.linkedin.com/company/abu-dhabi-national-takaful-p-s-c-takaful-/", "slug": "abu-dhabi-national-takaful"},
+        {"name": "Al Buhaira National Insurance", "url": "https://www.linkedin.com/company/al-buhaira-national-insurance-co./", "slug": "al-buhaira-national-insurance"},
+        {"name": "Al Khazna Insurance", "url": "https://www.linkedin.com/company/al-khazna-insurance-co-psc-akic-/", "slug": "al-khazna-insurance"},
+        {"name": "Al Dhafra Insurance", "url": "https://www.linkedin.com/company/al-dhafra-insurance-co-psc-/", "slug": "al-dhafra-insurance"},
+        {"name": "Al Sagr National Insurance", "url": "https://www.linkedin.com/company/alsagruae/", "slug": "al-sagr-national-insurance"},
+        {"name": "Salama Islamic Arab Insurance", "url": "https://www.linkedin.com/company/islamic-arab-insurance-co-salama/", "slug": "salama-islamic-arab-insurance"},
         {"name": "Arabia Insurance", "url": "https://linkedin.com/company/arabia-insurance", "slug": "arabia-insurance"},
-        {"name": "Liva Insurance", "url": "https://linkedin.com/company/liva-insurance", "slug": "liva-insurance"},
-        {"name": "MetLife UAE insurance", "url": "https://linkedin.com/company/metlife", "slug": "metlife"},
-        {"name": "Allianz Trade Middle East insurance", "url": "https://linkedin.com/company/allianz-trade", "slug": "allianz-trade"},
-        {"name": "MEDGULF insurance UAE", "url": "https://linkedin.com/company/medgulf", "slug": "medgulf"},
-        {"name": "Bupa Global Middle East insurance", "url": "https://linkedin.com/company/bupa-global", "slug": "bupa-global"},
-        {"name": "Cigna Middle East insurance", "url": "https://linkedin.com/company/cigna", "slug": "cigna"},
+        {"name": "MetLife UAE insurance", "url": "https://www.linkedin.com/company/metlife-gulf/", "slug": "metlife"},
+        {"name": "Allianz Trade Middle East insurance", "url": "https://www.linkedin.com/company/allianz-trade-gcc/", "slug": "allianz-trade"},
+        {"name": "MEDGULF insurance UAE", "url": "https://www.linkedin.com/company/medgulfuae/", "slug": "medgulf"},
     ],
     "UAE|Broker": [
         {"name": "Marsh UAE insurance broker", "url": "https://linkedin.com/company/marsh-uae", "slug": "marsh-uae"},
@@ -163,7 +161,6 @@ DIRECTORY = {
         {"name": "Master Insurance Brokers UAE", "url": "https://linkedin.com/company/master-insurance-brokers", "slug": "master-insurance-brokers"},
         {"name": "JK Risk Managers Insurance Brokers", "url": "https://linkedin.com/company/j-k-risk-managers", "slug": "j-k-risk-managers"},
         {"name": "Lifecare International Insurance Brokers", "url": "https://linkedin.com/company/lifecare-international", "slug": "lifecare-international"},
-        {"name": "Malakut Insurance Brokers", "url": "https://linkedin.com/company/malakut-insurance-brokers", "slug": "malakut-insurance-brokers"},
         {"name": "Kay International insurance AMEA", "url": "https://linkedin.com/company/kay-international", "slug": "kay-international"},
     ],
     "UAE|Re-Broker": [
@@ -332,6 +329,51 @@ DIRECTORY = {
     ],
 }
 
+# ── LinkedIn URL source of truth (company_urls_new.csv) ───────────────────────
+# company_urls_new.csv is the AUTHORITATIVE list of companies to scrape. It is a
+# headerless "name,url" file whose names match the "name" field in DIRECTORY.
+# Only companies listed in this CSV are scraped, and each is fetched from its
+# CSV URL. Companies absent from the CSV are skipped entirely.
+URL_OVERRIDE_CSV = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "company_urls_new.csv"
+)
+
+
+def apply_url_overrides(path: str = URL_OVERRIDE_CSV) -> set:
+    """Overlay CSV URLs onto DIRECTORY and return the set of company names that
+    appear in the CSV. Only those names should be scraped."""
+    if not os.path.exists(path):
+        print(f"⚠ URL CSV not found ({path}); NO LinkedIn companies will be scraped.\n")
+        return set()
+
+    overrides = {}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for row in csv.reader(f):
+            if len(row) < 2:
+                continue
+            name, url = row[0].strip(), row[1].strip()
+            # Skip a header row if one is ever added.
+            if name.lower() in ("name", "company", "query") and "linkedin.com" not in url:
+                continue
+            if name and url:
+                overrides[name] = url
+
+    matched = set()
+    for companies in DIRECTORY.values():
+        for company in companies:
+            if company["name"] in overrides:
+                company["url"] = overrides[company["name"]]
+                matched.add(company["name"])
+
+    unmatched = [n for n in overrides if n not in matched]
+    print(f"URL source: {len(matched)} companies from {len(overrides)} CSV rows "
+          f"({len(unmatched)} CSV names not found in DIRECTORY).")
+    for n in unmatched:
+        print(f"   ⚠ CSV name not in DIRECTORY (ignored): {n}")
+    print()
+    return matched
+
+
 # ── Hiring filter ──────────────────────────────────────────────────────────────
 HIRING_KEYWORDS = [
     "we're hiring", "we are hiring", "job opening", "job opportunity",
@@ -345,41 +387,21 @@ def is_hiring_post(text: str) -> bool:
     return any(kw in (text or "").lower() for kw in HIRING_KEYWORDS)
 
 
-# ── Author match ───────────────────────────────────────────────────────────────
-def post_is_from_company(item: dict, slug: str) -> bool:
-    post_url    = (item.get("post_url") or "").lower()
-    author      = item.get("author") or {}
-    author_url  = (author.get("profile_url") or author.get("company_url") or "").lower() \
-                  if isinstance(author, dict) else ""
-    author_name = (author.get("name") or "").lower() if isinstance(author, dict) else ""
-
-    slug_lower    = slug.lower()
-    slug_spaced   = slug_lower.replace("-", " ")
-    slug_nohyphen = slug_lower.replace("-", "")
-
-    return (
-        slug_lower    in post_url     or
-        slug_spaced   in post_url     or
-        slug_lower    in author_url   or
-        slug_spaced   in author_name  or
-        slug_nohyphen in author_name
-    )
-
-
 # ── LinkedIn fetch ─────────────────────────────────────────────────────────────
 def fetch_company_posts(company: dict) -> list:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SCRAPE_WINDOW_DAYS)
     try:
-        run = apify.actor("apimaestro/linkedin-posts-search-scraper-no-cookies").call(
+        run = apify.actor("harvestapi/linkedin-company-posts").call(
             run_input={
-                "keyword":    company["name"],
-                "sortBy":     "date_posted",
-                "datePosted": APIFY_DATE_POSTED,
-                "maxResults": MAX_RESULTS_PER_COMPANY,
+                "targetUrls":        [company["url"]],
+                "maxPosts":          MAX_RESULTS_PER_COMPANY,
+                "postedLimitDate":   cutoff.isoformat().replace("+00:00", "Z"),
+                "includeReposts":    False,
+                "includeQuotePosts": False,
             },
-            timeout_secs=90,
+            timeout_secs=120,
         )
-        items = list(apify.dataset(run["defaultDatasetId"]).iterate_items())
-        return [i for i in items if post_is_from_company(i, company["slug"])]
+        return list(apify.dataset(run["defaultDatasetId"]).iterate_items())
     except Exception as e:
         print(f"      ✗ Error: {e}")
         return []
@@ -422,13 +444,15 @@ def is_within_window(ts: str) -> bool:
 
 # ── Row builder (LinkedIn) ─────────────────────────────────────────────────────
 def build_linkedin_row(item: dict, region: str, entity_type: str):
-    url = item.get("post_url", "")
+    url = item.get("linkedinUrl", "")
     if not url or "linkedin.com" not in url:
         return None
-    text = item.get("text") or ""
+    text = item.get("content") or ""
     if is_hiring_post(text):
         return None
-    published_at = parse_timestamp(item.get("posted_at", {}))
+    # postedAt is a dict: {"timestamp": <ms>, "date": "<ISO8601>"}.
+    # parse_timestamp already extracts the "date" key from dicts.
+    published_at = parse_timestamp(item.get("postedAt", {}))
     if not is_within_window(published_at):
         return None
 
@@ -621,6 +645,51 @@ AI_PROMPT_HEADER = (
 )
 
 
+def _finalize_ai(data: dict) -> dict:
+    """Normalize a parsed AI response into a clean row dict."""
+    headline = (data.get("headline") or "").strip()
+    summary  = (data.get("summary")  or "").strip()
+    topic    = (data.get("topic")    or "").strip().title()
+    if topic not in VALID_TOPICS:
+        topic = "Business"
+    if _is_degenerate(headline, summary):
+        headline, summary = "", ""
+    return {
+        "headline": headline[:200],
+        "summary":  summary[:500],
+        "topic":    topic,
+    }
+
+
+def _salvage_json(err) -> dict | None:
+    """Groq's JSON mode occasionally emits unquoted string values (e.g.
+    `"headline": GCC business challenges,`) which fail validation. The raw
+    text is returned in the error's `failed_generation` field; recover the
+    three fields with regex as a best-effort fallback so we don't burn a
+    retry on a result the model already produced."""
+    body = getattr(err, "body", None)
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error") or {}
+    if error.get("code") != "json_validate_failed":
+        return None
+    raw = error.get("failed_generation") or ""
+    if not raw:
+        return None
+    out = {}
+    for key in ("headline", "summary", "topic"):
+        # Prefer a properly quoted value; fall back to an unquoted run up to
+        # the end of the line / closing brace (the model formats one per line).
+        m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+        if not m:
+            m = re.search(rf'"{key}"\s*:\s*([^\n}}]+)', raw)
+        out[key] = (m.group(1).strip().rstrip(",").strip().strip('"').strip()
+                    if m else "")
+    if not (out["headline"] or out["summary"] or out["topic"]):
+        return None
+    return out
+
+
 def generate_ai_content(title: str, body: str = "") -> dict | None:
     if not groq_client:
         return None
@@ -633,30 +702,29 @@ def generate_ai_content(title: str, body: str = "") -> dict | None:
         f"TITLE: {title[:500]}\n"
         f"BODY: {body[:2200]}"
     )
-    try:
-        resp = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=350,
-        )
-        data = json.loads(resp.choices[0].message.content)
-        headline = (data.get("headline") or "").strip()
-        summary  = (data.get("summary")  or "").strip()
-        topic    = (data.get("topic")    or "").strip().title()
-        if topic not in VALID_TOPICS:
-            topic = "Business"
-        if _is_degenerate(headline, summary):
-            headline, summary = "", ""
-        return {
-            "headline": headline[:200],
-            "summary":  summary[:500],
-            "topic":    topic,
-        }
-    except Exception as e:
-        print(f"      Groq error: {e}")
-        return None
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = groq_client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                # Nudge temperature up on retries to escape a deterministically
+                # stuck malformed generation.
+                temperature=0.2 + 0.2 * attempt,
+                max_tokens=350,
+            )
+            return _finalize_ai(json.loads(resp.choices[0].message.content))
+        except Exception as e:
+            last_err = e
+            # If the model produced text but it failed JSON validation, try to
+            # recover it instead of discarding a usable result.
+            salvaged = _salvage_json(e)
+            if salvaged is not None:
+                return _finalize_ai(salvaged)
+            time.sleep(0.5)
+    print(f"      Groq error after retries: {last_err}")
+    return None
 
 
 def enrich_with_ai(limit: int = 200) -> int:
@@ -716,6 +784,10 @@ def run_scraper(region_filter: str = None, type_filter: str = None):
     print(f"Purged posts older than {RETENTION_DAYS} days. "
           f"Scraping window: last {SCRAPE_WINDOW_DAYS} day(s).\n")
 
+    # company_urls_new.csv is the authoritative list: only companies in it are
+    # scraped, each from its CSV URL.
+    allowed = apply_url_overrides()
+
     grand_total = 0
     total_runs  = 0
 
@@ -728,6 +800,11 @@ def run_scraper(region_filter: str = None, type_filter: str = None):
         if type_filter and entity_type != type_filter:
             continue
 
+        # Restrict to companies present in the CSV.
+        companies = [c for c in companies if c["name"] in allowed]
+        if not companies:
+            continue
+
         print(f"── {region} | {entity_type} ({len(companies)} companies)")
         seen_urls = set()
         cat_total = 0
@@ -738,7 +815,7 @@ def run_scraper(region_filter: str = None, type_filter: str = None):
             total_runs += 1
             rows = []
             for item in items:
-                url = item.get("post_url", "")
+                url = item.get("linkedinUrl", "")
                 if url and url not in seen_urls:
                     seen_urls.add(url)
                     row = build_linkedin_row(item, region, entity_type)
@@ -765,16 +842,43 @@ def run_scraper(region_filter: str = None, type_filter: str = None):
 
 
 if __name__ == "__main__":
-    # `python scraper.py ai`       → only run AI enrichment on existing rows
-    # `python scraper.py news`     → only run news feeds + AI
-    # `python scraper.py UAE`      → only scrape UAE companies (+ news + AI)
-    # `python scraper.py UAE Insurer` → narrow to UAE Insurers
-    if len(sys.argv) > 1 and sys.argv[1].lower() == "ai":
-        enrich_with_ai(limit=int(sys.argv[2]) if len(sys.argv) > 2 else 200)
-    elif len(sys.argv) > 1 and sys.argv[1].lower() == "news":
+    # Usage:
+    #   python scraper.py                  full daily run (window = SCRAPE_WINDOW_DAYS, default 1)
+    #   python scraper.py backfill         one-time backfill over the full retention window
+    #   python scraper.py --days 7         full run, last 7 days (initial backfill)
+    #   python scraper.py --days 7 UAE Insurer   7-day backfill, UAE insurers only
+    #   python scraper.py UAE              only scrape UAE companies (+ news + AI)
+    #   python scraper.py UAE Insurer      narrow to UAE Insurers
+    #   python scraper.py ai [limit]       only run AI enrichment on existing rows
+    #   python scraper.py news             only run news feeds + AI
+    args = sys.argv[1:]
+
+    # Optional window override (takes precedence over the SCRAPE_WINDOW_DAYS env
+    # var). `backfill` = fetch the full retention window in one go.
+    window_override = None
+    if "backfill" in args:
+        window_override = RETENTION_DAYS
+        args.remove("backfill")
+    if "--days" in args:
+        i = args.index("--days")
+        try:
+            window_override = int(args[i + 1])
+            del args[i:i + 2]
+        except (IndexError, ValueError):
+            sys.exit("Error: --days requires an integer, e.g. --days 7")
+
+    if window_override is not None:
+        # Rebind the module global; fetch_company_posts() and is_within_window()
+        # read it live, so this controls both the actor cutoff and the filter.
+        SCRAPE_WINDOW_DAYS = window_override
+        print(f"Window override: scraping the last {SCRAPE_WINDOW_DAYS} day(s).")
+
+    if args and args[0].lower() == "ai":
+        enrich_with_ai(limit=int(args[1]) if len(args) > 1 else 200)
+    elif args and args[0].lower() == "news":
         scrape_news_feeds()
         enrich_with_ai()
     else:
-        r = sys.argv[1] if len(sys.argv) > 1 else None
-        t = sys.argv[2] if len(sys.argv) > 2 else None
+        r = args[0] if len(args) > 0 else None
+        t = args[1] if len(args) > 1 else None
         run_scraper(region_filter=r, type_filter=t)
