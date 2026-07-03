@@ -1,5 +1,8 @@
-apify-client>=1.7.0
-supabase>=2.4.0
-feedparser>=6.0.11
-cerebras-cloud-sdk>=1.0.0
-python-dotenv>=1.0.0
+# Pinned to the versions verified working locally. Pinning avoids the GitHub
+# Actions runner installing a newer release with a changed API (e.g. a newer
+# apify-client dropped the `timeout_secs` kwarg used in scraper.py).
+apify-client==2.5.1
+supabase==2.30.1
+feedparser==6.0.12
+cerebras-cloud-sdk==1.67.0
+python-dotenv==1.2.2
