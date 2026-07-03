@@ -20,17 +20,23 @@ except ImportError:
 SUPABASE_URL = os.environ["VITE_SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 APIFY_TOKEN  = os.environ["APIFY_TOKEN"]
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL   = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY")
+# Free-tier models: gpt-oss-120b, gemma-4-31b, zai-glm-4.7. gpt-oss-120b is a
+# REASONING model — it spends tokens thinking before the answer, so the token
+# budget below must be generous or the JSON gets truncated mid-string.
+CEREBRAS_MODEL   = os.environ.get("CEREBRAS_MODEL", "gpt-oss-120b")
+# 400 fails (reasoning eats the budget); 2500+ is safe. Cerebras stops at the
+# real end (finish_reason=stop), so a high cap doesn't waste tokens.
+AI_MAX_TOKENS    = int(os.environ.get("AI_MAX_TOKENS", "3000"))
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 apify    = ApifyClient(APIFY_TOKEN)
 
 try:
-    from groq import Groq
-    groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+    from cerebras.cloud.sdk import Cerebras
+    ai_client = Cerebras(api_key=CEREBRAS_API_KEY) if CEREBRAS_API_KEY else None
 except ImportError:
-    groq_client = None
+    ai_client = None
 
 MAX_RESULTS_PER_COMPANY = 5
 
@@ -45,34 +51,38 @@ RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
 # HarvestAPI accepts a `postedLimitDate` cutoff (ISO 8601). The actor returns
 # posts from now back to this date, newest-first. Computed per-fetch below.
 
-# ── UAE news sites ────────────────────────────────────────────────────────────
-# Direct UAE publisher feeds. Khaleej Times exposes RSS via a hidden API
-# (discovered through the homepage's <link rel="alternate"> tags). The
-# National uses Arc Publishing's outbound feed. Arabian Business and
-# Gulf Business expose news sitemaps.
+# ── News sources ──────────────────────────────────────────────────────────────
 HTTP_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+# Google News RSS search, scoped to insurance + region. This is the PRIMARY news
+# source: it reliably surfaces insurance stories from the UAE/GCC press (Khaleej
+# Times, Gulf News, The National, Arabian Business, Zawya, …). The direct
+# publisher feeds below rarely carry insurance content on any given day, so they
+# are a supplementary first-party source only.
+NEWS_QUERIES = [
+    ("UAE insurance",            "UAE"),
+    ("Dubai insurance",          "UAE"),
+    ("Abu Dhabi insurance",      "UAE"),
+    ("UAE takaful",              "UAE"),
+    ("UAE insurer",              "UAE"),
+    ("UAE reinsurance",          "UAE"),
+    ("Saudi Arabia insurance",   "GCC"),
+    ("Qatar insurance",          "GCC"),
+    ("GCC insurance",            "GCC"),
+    ("Middle East reinsurance",  "GCC"),
+]
+
+# Direct UAE publisher feeds (supplementary first-party hits).
 NEWS_RSS_FEEDS = [
-    # Khaleej Times
     ("Khaleej Times", "Business",
      "https://www.khaleejtimes.com/api/v1/collections/business.rss", "UAE"),
     ("Khaleej Times", "UAE",
      "https://www.khaleejtimes.com/api/v1/collections/uae.rss", "UAE"),
-    ("Khaleej Times", "Top",
-     "https://www.khaleejtimes.com/api/v1/collections/top-section.rss", "UAE"),
-    # The National
     ("The National", "Business",
      "https://www.thenationalnews.com/arc/outboundfeeds/rss/category/business/?outputType=xml", "UAE"),
-    ("The National", "All",
-     "https://www.thenationalnews.com/arc/outboundfeeds/rss/?outputType=xml", "UAE"),
-]
-
-NEWS_SITEMAPS = [
-    ("Arabian Business", "https://www.arabianbusiness.com/news-sitemap.xml", "UAE"),
-    ("Gulf Business",    "https://gulfbusiness.com/sitemap.xml",             "UAE"),
 ]
 
 # Strict insurance filter. Multi-word phrases avoid the false positives we
@@ -474,14 +484,8 @@ def build_linkedin_row(item: dict, region: str, entity_type: str):
     }
 
 
-# ── News scraper (direct UAE publisher RSS + sitemaps) ────────────────────────
+# ── News scraper (Google News + direct UAE publisher RSS) ─────────────────────
 import urllib.request
-from xml.etree import ElementTree as ET
-
-SITEMAP_NS = {
-    "s": "http://www.sitemaps.org/schemas/sitemap/0.9",
-    "n": "http://www.google.com/schemas/sitemap-news/0.9",
-}
 
 
 def _http_get(url: str, timeout: int = 15) -> bytes:
@@ -536,64 +540,79 @@ def _scrape_rss_feed(publisher: str, section: str, feed_url: str, region: str,
     return rows
 
 
-def _scrape_news_sitemap(publisher: str, sitemap_url: str, region: str,
-                         seen_urls: set) -> list:
+def _gn_source(entry, title: str) -> str:
+    """Google News puts the publisher in entry.source.title, and also appends
+    ' - Publisher' to the title as a fallback."""
+    src = entry.get("source")
+    if isinstance(src, dict) and src.get("title"):
+        return src["title"]
+    if getattr(src, "title", None):
+        return src.title
+    if " - " in title:
+        return title.rsplit(" - ", 1)[-1].strip()
+    return "Google News"
+
+
+def _scrape_google_news(query: str, region: str, seen_urls: set) -> list:
     rows = []
+    feed_url = ("https://news.google.com/rss/search?q="
+                + urllib.parse.quote(query) + "&hl=en-US&gl=US&ceid=US:en")
     try:
-        body = _http_get(sitemap_url)
-        root = ET.fromstring(body)
+        body = _http_get(feed_url)
     except Exception as e:
-        print(f"   ✗ {publisher} sitemap: {e}")
+        print(f"   ✗ Google News '{query}': {e}")
         return rows
-    for u in root.findall("s:url", SITEMAP_NS):
-        loc   = (u.findtext("s:loc", "", SITEMAP_NS) or "").strip()
-        title = (u.findtext(".//n:title", "", SITEMAP_NS) or "").strip()
-        date  = (u.findtext(".//n:publication_date", "", SITEMAP_NS)
-                 or u.findtext("s:lastmod", "", SITEMAP_NS) or "").strip()
-        if not loc or loc in seen_urls:
+    feed = feedparser.parse(body)
+    for entry in feed.entries:
+        title   = (entry.get("title") or "").strip()
+        summary = (entry.get("summary") or entry.get("description") or "").strip()
+        url     = (entry.get("link") or "").strip()
+        if not url or url in seen_urls:
             continue
-        # Title-based filter (sitemap entries have no body); also accept hits
-        # in the URL slug since news sitemaps often have descriptive slugs.
-        if not matches_insurance(f"{title} {loc}"):
+        if not matches_insurance(f"{title} {summary}"):
             continue
-        published_at = parse_timestamp(date) if date else datetime.now(timezone.utc).isoformat()
+        published_at = _parse_rss_published(entry)
         if not is_within_window(published_at):
             continue
-        seen_urls.add(loc)
+        seen_urls.add(url)
+        publisher   = _gn_source(entry, title)
+        clean_title = title.rsplit(" - ", 1)[0] if " - " in title else title
         rows.append({
-            "url":          loc,
-            "title":        (title or loc)[:120],
-            "snippet":      (title or loc)[:300],
+            "url":          url,
+            "title":        clean_title[:120],
+            "snippet":      (summary or clean_title)[:300],
             "author":       publisher,
             "published_at": published_at,
             "category":     f"{region} | News",
-            "topic":        classify_topic(title),
+            "topic":        classify_topic(f"{clean_title}. {summary}"),
             "source":       "news",
         })
     return rows
 
 
 def scrape_news_feeds():
-    print("\n── News Feeds (UAE publishers)")
+    print("\n── News Feeds")
     rows      = []
     seen_urls = set()
 
+    # Primary: Google News (insurance-scoped, aggregates UAE/GCC press)
+    for query, region in NEWS_QUERIES:
+        before = len(rows)
+        rows.extend(_scrape_google_news(query, region, seen_urls))
+        print(f"   Google News '{query}': {len(rows) - before} articles")
+
+    # Supplementary: direct UAE publisher feeds
     for publisher, section, url, region in NEWS_RSS_FEEDS:
         before = len(rows)
         rows.extend(_scrape_rss_feed(publisher, section, url, region, seen_urls))
         print(f"   {publisher} / {section}: {len(rows) - before} articles")
-
-    for publisher, url, region in NEWS_SITEMAPS:
-        before = len(rows)
-        rows.extend(_scrape_news_sitemap(publisher, url, region, seen_urls))
-        print(f"   {publisher} (sitemap): {len(rows) - before} articles")
 
     inserted = upsert_posts(rows)
     print(f"   News total inserted: {inserted}\n")
     return inserted
 
 
-# ── Groq AI enrichment ────────────────────────────────────────────────────────
+# ── Cerebras AI enrichment ────────────────────────────────────────────────────
 VALID_TOPICS = {"Business", "Technical", "Regulatory"}
 
 # Phrases the model emits when it gives up on thin content; we treat any of
@@ -662,11 +681,10 @@ def _finalize_ai(data: dict) -> dict:
 
 
 def _salvage_json(err) -> dict | None:
-    """Groq's JSON mode occasionally emits unquoted string values (e.g.
-    `"headline": GCC business challenges,`) which fail validation. The raw
-    text is returned in the error's `failed_generation` field; recover the
-    three fields with regex as a best-effort fallback so we don't burn a
-    retry on a result the model already produced."""
+    """Some providers' JSON mode occasionally emits unquoted string values (e.g.
+    `"headline": GCC business challenges,`) which fail validation. When the raw
+    text is exposed in the error's `failed_generation` field, recover the three
+    fields with regex as a best-effort fallback rather than burning a retry."""
     body = getattr(err, "body", None)
     if not isinstance(body, dict):
         return None
@@ -691,7 +709,7 @@ def _salvage_json(err) -> dict | None:
 
 
 def generate_ai_content(title: str, body: str = "") -> dict | None:
-    if not groq_client:
+    if not ai_client:
         return None
     title = (title or "").strip()
     body  = (body  or "").strip()
@@ -705,16 +723,21 @@ def generate_ai_content(title: str, body: str = "") -> dict | None:
     last_err = None
     for attempt in range(3):
         try:
-            resp = groq_client.chat.completions.create(
-                model=GROQ_MODEL,
+            resp = ai_client.chat.completions.create(
+                model=CEREBRAS_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 # Nudge temperature up on retries to escape a deterministically
                 # stuck malformed generation.
                 temperature=0.2 + 0.2 * attempt,
-                max_tokens=350,
+                max_completion_tokens=AI_MAX_TOKENS,
             )
-            return _finalize_ai(json.loads(resp.choices[0].message.content))
+            content = resp.choices[0].message.content
+            # Reasoning models can return empty content if the token budget was
+            # exhausted on reasoning; treat that as a retryable failure.
+            if not content or not content.strip():
+                raise ValueError("empty content from model (raise AI_MAX_TOKENS?)")
+            return _finalize_ai(json.loads(content))
         except Exception as e:
             last_err = e
             # If the model produced text but it failed JSON validation, try to
@@ -723,13 +746,13 @@ def generate_ai_content(title: str, body: str = "") -> dict | None:
             if salvaged is not None:
                 return _finalize_ai(salvaged)
             time.sleep(0.5)
-    print(f"      Groq error after retries: {last_err}")
+    print(f"      Cerebras error after retries: {last_err}")
     return None
 
 
 def enrich_with_ai(limit: int = 200) -> int:
-    if not groq_client:
-        print("\n⚠ GROQ_API_KEY not set or groq package missing — skipping AI enrichment\n")
+    if not ai_client:
+        print("\n⚠ CEREBRAS_API_KEY not set or cerebras-cloud-sdk missing — skipping AI enrichment\n")
         return 0
     resp = (
         supabase.table("linkedin_posts")
@@ -739,7 +762,7 @@ def enrich_with_ai(limit: int = 200) -> int:
         .execute()
     )
     pending = resp.data or []
-    print(f"\n── AI enrichment ({len(pending)} posts pending, model={GROQ_MODEL})")
+    print(f"\n── AI enrichment ({len(pending)} posts pending, model={CEREBRAS_MODEL})")
     enriched = 0
     skipped  = 0
     for row in pending:
@@ -749,7 +772,7 @@ def enrich_with_ai(limit: int = 200) -> int:
             continue
         ai = generate_ai_content(title, snippet)
         if ai is None:
-            # Groq call failed — leave NULL so next run retries
+            # AI call failed — leave NULL so next run retries
             continue
         supabase.table("linkedin_posts").update({
             "ai_headline": ai["headline"],

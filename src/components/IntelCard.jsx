@@ -82,7 +82,7 @@ export default function IntelCard({ post }) {
                     hover:shadow-card-hover transition-shadow duration-200 overflow-hidden mb-3.5">
 
       {/* Card header */}
-      <div className="px-6 pt-5 pb-4">
+      <div className="px-4 md:px-6 pt-5 pb-4">
 
         {/* Badges row */}
         <div className="flex items-center gap-1.5 flex-wrap mb-3">
@@ -113,7 +113,7 @@ export default function IntelCard({ post }) {
       </div>
 
       {/* AI Summary */}
-      <div className="px-6 pb-5 border-t border-gray-50">
+      <div className="px-4 md:px-6 pb-5 border-t border-gray-50">
         <div className="pt-4">
           <div className="flex items-center gap-1.5 text-xs font-semibold uppercase
                           tracking-widest text-accent mb-2">

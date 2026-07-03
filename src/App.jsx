@@ -1,3 +1,4 @@
+import { useState }    from 'react'
 import Sidebar        from './components/Sidebar.jsx'
 import TopNav         from './components/TopNav.jsx'
 import FeedHeader     from './components/FeedHeader.jsx'
@@ -17,6 +18,9 @@ export default function App() {
     resetFilters,
   } = useFilters()
 
+  // Mobile: sidebar is an off-canvas drawer toggled by the hamburger.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
   const { posts, loading, error } = usePosts(filters)
 
   const hasActiveFilters =
@@ -28,11 +32,13 @@ export default function App() {
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
 
-      {/* Sidebar — fixed left */}
+      {/* Sidebar — static on desktop, slide-in drawer on mobile */}
       <Sidebar
         filters={filters}
         setRegion={setRegion}
         setSource={setSource}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
 
       {/* Main content */}
@@ -43,10 +49,11 @@ export default function App() {
           keyword={filters.keyword}
           onKeywordChange={setKeyword}
           posts={posts}
+          onMenuClick={() => setSidebarOpen(true)}
         />
 
         {/* Feed */}
-        <main className="flex-1 px-8 py-7 max-w-4xl w-full mx-auto">
+        <main className="flex-1 px-4 py-5 md:px-8 md:py-7 max-w-4xl w-full mx-auto">
 
           {/* Header + topic pills */}
           <FeedHeader

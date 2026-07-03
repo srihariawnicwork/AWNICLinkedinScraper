@@ -44,7 +44,7 @@ export default function FeedHeader({ filters, setTopic, postCount, latestPost })
       {/* Title row */}
       <div className="flex items-start justify-between mb-1">
         <div>
-          <h1 className="font-newsreader font-bold text-3xl text-slate-900 leading-tight">
+          <h1 className="font-newsreader font-bold text-2xl md:text-3xl text-slate-900 leading-tight">
             Latest Intelligence
           </h1>
           <p className="text-sm text-gray-500 mt-1">

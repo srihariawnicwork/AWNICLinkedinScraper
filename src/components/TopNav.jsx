@@ -32,17 +32,28 @@ function exportToCSV(posts) {
   URL.revokeObjectURL(url)
 }
 
-export default function TopNav({ keyword, onKeywordChange, posts }) {
+export default function TopNav({ keyword, onKeywordChange, posts, onMenuClick = () => {} }) {
   const inputRef = useRef(null)
 
   return (
-    <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-3
-                    flex items-center justify-between gap-6">
+    <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-4 md:px-8 py-3
+                    flex items-center gap-3 md:gap-6">
 
-      {/* Search */}
+      {/* Hamburger — mobile only */}
+      <button
+        onClick={onMenuClick}
+        className="md:hidden text-slate-700 hover:text-slate-900 shrink-0 -ml-1 p-1"
+        aria-label="Open menu"
+      >
+        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+
+      {/* Search — flexible width, caps out on desktop */}
       <div className="flex items-center gap-2 bg-gray-50 border border-gray-200
-                      rounded-lg px-3 py-2 w-72 focus-within:border-gray-400
-                      transition-colors">
+                      rounded-lg px-3 py-2 flex-1 min-w-0 md:flex-none md:w-72
+                      focus-within:border-gray-400 transition-colors">
         <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
             d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -59,7 +70,7 @@ export default function TopNav({ keyword, onKeywordChange, posts }) {
         {keyword && (
           <button
             onClick={() => onKeywordChange('')}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-gray-400 hover:text-gray-600 transition-colors shrink-0"
           >
             ✕
           </button>
@@ -67,25 +78,26 @@ export default function TopNav({ keyword, onKeywordChange, posts }) {
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-3">
-        {/* Bell */}
-        <button className="text-gray-400 hover:text-gray-600 transition-colors text-lg">
+      <div className="flex items-center gap-3 shrink-0 ml-auto">
+        {/* Bell — hidden on the smallest screens */}
+        <button className="hidden sm:block text-gray-400 hover:text-gray-600 transition-colors text-lg">
           🔔
         </button>
 
-        {/* Export */}
+        {/* Export — icon always; label hides on mobile */}
         <button
           onClick={() => exportToCSV(posts)}
           disabled={!posts?.length}
           className="flex items-center gap-2 bg-slate-900 text-white text-xs font-semibold
-                     px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors
+                     px-3 md:px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors
                      disabled:opacity-40 disabled:cursor-not-allowed"
+          aria-label="Export data"
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-4 h-4 md:w-3.5 md:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
-          Export Data
+          <span className="hidden sm:inline">Export Data</span>
         </button>
       </div>
     </div>
