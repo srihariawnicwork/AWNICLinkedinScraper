@@ -1,0 +1,12 @@
+# Normalize line endings: store everything as LF in the repo.
+# Prevents spurious CRLF/LF conflicts between Windows and the GitHub-hosted copy.
+* text=auto eol=lf
+
+# Explicit binary types (never touch these)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
